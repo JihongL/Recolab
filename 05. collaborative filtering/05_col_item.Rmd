@@ -1,0 +1,211 @@
+---
+title: "tem Based Collaboration Filtering with Jester dats set"
+output: html_notebook
+---
+
+```{r}
+library(recommenderlab)
+```
+
+```{r}
+data("Jester5k")
+```
+
+```{r}
+model_data = Jester5k[rowCounts(Jester5k)<80]
+model_data
+```
+
+```{r}
+boxplot(rowMeans(model_data))
+```
+
+- 약 -5 이하, 약 7 이상의 값이 이상치로 판단됨
+
+```{r}
+dim(model_data[rowMeans(model_data) < -5])
+dim(model_data[rowMeans(model_data) > 7])
+```
+
+- 79개 레코드는 그 평가의 평균이 -5 이하로 매우 낮음
+- 19개 레코드는 그 평가의 평균이 7 이상으로 매우 높음
+- 총 98개 이상치가 발견되어 제거된 데이터 셋 생성
+
+```{r}
+model_data = model_data[rowMeans(model_data)>=-5 & rowMeans(model_data)<=7]
+model_data
+```
+
+- 기존 3261개 레코드에서 이상치 98개를 제거한 3163개 레코드가 반환됨
+
+```{r}
+which_train <- sample(x = c(TRUE, FALSE), size = nrow(model_data),
+                      replace = TRUE, prob = c(0.8, 0.2))
+class(which_train)
+head(which_train)
+```
+
+```{r}
+model_data_train <- model_data[which_train, ]
+dim(model_data_train)
+```
+
+```{r}
+model_data_test <- model_data[!which_train, ]
+dim(model_data_test)
+```
+
+```{r}
+model_to_evaluate <- "IBCF"
+model_parameters <- list(k = 30)
+```
+
+```{r}
+model_recommender <- Recommender(data = model_data_train, method = model_to_evaluate,
+                                 parameter = model_parameters)
+model_recommender
+```
+
+```{r}
+model_details = getModel(model_recommender)
+str(model_details)
+```
+
+```{r}
+items_to_recommend <- 10
+```
+
+```{r}
+model_prediction <- predict(object = model_recommender, newdata = model_data_test,
+                            n = items_to_recommend)
+model_prediction
+```
+
+```{r}
+print(class(model_prediction))
+```
+
+```{r}
+slotNames(model_prediction)
+```
+
+```{r}
+model_prediction@items[[1]]
+```
+
+```{r}
+recc_user_1 = model_prediction@items[[1]]
+jokes_user_1 = model_prediction@itemLabels[recc_user_1]
+jokes_user_1
+```
+
+```{r}
+n_fold <- 4
+items_to_keep <- 15
+rating_threshold <- 3
+```
+
+```{r}
+eval_sets <- evaluationScheme(data = model_data, method = "cross-validation",
+                              k = n_fold, given = items_to_keep, goodRating = rating_threshold)
+size_sets <- sapply(eval_sets@runsTrain, length)
+size_sets
+```
+
+```{r}
+model_to_evaluate <- "IBCF"
+model_parameters <- NULL
+```
+
+```{r}
+getData(eval_sets, "train")
+```
+
+```{r}
+eval_recommender <- Recommender(data = getData(eval_sets, "train"),
+                                method = model_to_evaluate, parameter = model_parameters)
+items_to_recommend <- 10
+```
+
+```{r}
+eval_prediction <- predict(object = eval_recommender, newdata = getData(eval_sets, "known"),
+                           n = items_to_recommend, type = "ratings")
+class(eval_prediction)
+```
+
+```{r}
+eval_accuracy <- calcPredictionAccuracy(x = eval_prediction,
+                                        data = getData(eval_sets, "unknown"), byUser = TRUE)
+head(eval_accuracy)
+```
+
+```{r}
+apply(eval_accuracy, 2, mean)
+```
+
+```{r}
+eval_accuracy <- calcPredictionAccuracy(x = eval_prediction,
+                                        data = getData(eval_sets, "unknown"), byUser = FALSE)
+head(eval_accuracy)
+```
+
+```{r}
+results <- evaluate(x = eval_sets, method = model_to_evaluate,
+                    n = seq(10, 100, 10))
+```
+
+```{r}
+results@results[1]
+```
+
+```{r}
+columns_to_sum <- c("TP", "FP", "FN", "TN", "precision", "recall")
+indices_summed <- Reduce("+", getConfusionMatrix(results))[, columns_to_sum]
+head(indices_summed)
+```
+
+```{r}
+plot(results, annotate = TRUE, main = "ROC curve")
+```
+
+```{r}
+plot(results, "prec/rec", annotate = TRUE, main = "Precision-recall")
+```
+
+```{r}
+vector_k <- c(5, 10, 20, 30, 40)
+model1 <- lapply(vector_k, function(k, l){list(name="IBCF", param=list(method="cosine", k=k))})
+names(model1) <- paste0("IBCF_cos_k", vector_k)
+names(model1)
+```
+
+```{r}
+model2 <- lapply(vector_k, function(k, l){list(name="IBCF", param=list(method="pearson", k=k))})
+names(model2) <- paste0("IBCF_pea_k", vector_k)
+names(model2)
+```
+
+```{r}
+models = append(model1, model2)
+models
+```
+
+```{r}
+n_recommendations <- c(1, 5, seq(10, 100, 10))
+```
+
+```{r}
+list_results <- evaluate(x = eval_sets, method = models,
+                         n = n_recommendations)
+```
+
+```{r}
+plot(list_results, annotate = c(1, 2), legend = "topleft")
+title("ROC curve")
+```
+
+```{r}
+plot(list_results, "prec/rec", annotate = 1, legend = "bottomright")
+title("precision-recall")
+```
+
