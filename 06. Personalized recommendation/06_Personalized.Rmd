@@ -1,0 +1,208 @@
+---
+title: "Personalized Recommendation Engine"
+output: html_notebook
+---
+# 개인화 추천 엔진 구축하기
+- 협업 필터링 시스템의 기본 전제<br>**과거에 유사한 취향을 지닌 사람은 미래에도 유사한 항목을 좋아할 것**
+
+## Data Import
+
+### User Data
+```{r}
+raw_data = read.csv("data/ml100k/u.data", sep="\t", header=F)
+colnames(raw_data) = c("UserId", "MovieId", "Rating", "TimeStamp")
+ratings = raw_data[, 1:3]
+head(ratings)
+```
+```{r}
+names(ratings)
+str(ratings)
+```
+
+### Movie Data
+```{r}
+movies = read.csv("data/ml100k/u.item", sep="|", header=F)
+colnames(movies) = c("MovieId", "MovieTitle", "ReleaseData",
+                     "VideoReleaseDate", "IMDbURL", "Unknown", "Action",
+                     "Adventure", "Animation", "Children", "Comedy",
+                     "Crime", "Documentary", "Drama", "Fantasy",
+                     "FilmNoir", "Horror", "Musical", "Mystery",
+                     "Romance", "SiFi", "Thriller", "War", "Western")
+movies = movies[, -c(2:5)]
+# 먼저 지우고 column 이름 넣지...
+View(movies)
+```
+
+```{r}
+names(movies)
+str(movies)
+```
+
+## 사용자 특징 추출
+- User data를 Movie data와 병합
+```{r}
+ratings = merge(x=ratings, y=movies, by="MovieId", all.x=TRUE)
+View(ratings)
+```
+- MovieId마다 사용자 평가가 맞춰짐
+- 단순히 영화 뿐 아니라 어떤 장르에 몇점을 부여했는지 확인 가능
+
+```{r}
+names(ratings)
+```
+
+## 추천 Class 생성
+- Rating을 3점을 기준으로 이진변수로 변환
+- 3점 이하는 0, 초과는 1
+```{r}
+nrat = unlist(lapply(ratings$Rating, function(x)
+  {
+  if(x>3) {return(1)}
+  else {return(0)}
+  }))
+ratings = cbind(ratings, nrat)
+head(ratings)
+```
+
+## EDA
+```{r}
+apply(ratings[, -c(1:3,23)], 2, function(x)table(x))
+```
+- Unkown에서 비정상적인 수치가 관측됨, 제거 후 모델 적용 필요
+
+```{r}
+scaled_ratings = ratings[, -c(3,4)]
+names(scaled_ratings)
+```
+- 데이터 표준화
+```{r}
+scaled_ratings = scale(scaled_ratings[, -c(1,2,21)])
+scaled_ratings = cbind(scaled_ratings, ratings[,c(1,2,23)])
+head(scaled_ratings)
+```
+
+## Model 적용
+### Data split
+```{r}
+set.seed(7)
+which_train <- sample(x=c(TRUE, FALSE), size=nrow(scaled_ratings),
+                      replace=TRUE, prob=c(0.8, 0.2))
+model_data_train <- scaled_ratings[which_train, ]
+model_data_test <- scaled_ratings[!which_train, ]
+dim(model_data_train)
+dim(model_data_test)
+```
+
+### Random Forest
+
+#### Train
+```{r}
+library(randomForest)
+fit = randomForest(as.factor(nrat)~., data=model_data_train[,-c(19,20)])
+fit
+```
+
+- Parameter를 조절하여 최적화 시도
+- mtry : 샘플의 개수, mtree : 트리의 개수
+
+```{r}
+summary(fit)
+```
+
+#### Test
+```{r}
+predictions <- predict(fit, model_data_test[, -c(19,20,21)], type="class")
+predictions[0:20]
+```
+
+### Scoring
+- 정밀도와 재현율로 모델의 성능평가
+```{r}
+cm = table(predictions, model_data_test$nrat)
+(accuracy <- sum(diag(cm)) / sum(cm))
+(precision <- diag(cm) / rowSums(cm))
+recall <- (diag(cm)/colSums(cm))
+recall
+```
+- Accuracy : 0.59
+- Precision : 0.60
+- Recall : 0.75
+
+### XGBoost
+```{r}
+library(xgboost)
+str(model_data_train)
+fit = xgboost(data=model_data_train[,-c(19,20)],
+              label = model_data_train$nrat,
+              objective = "binary:logistic")
+fit
+```
+
+## Apply
+- 특정 사용자(ID:943)에 대한 추천 생성
+
+### Movie ID 추출
+```{r}
+totalMovieIds = unique(movies$MovieId)
+head(totalMovieIds)
+tail(totalMovieIds)
+```
+
+### 943이 평가하지 않은 영화 추출
+```{r}
+# 평가하지 않은 영화 구하는 함수
+nonratedmoviedf = function(userid){
+  ratedmoives = raw_data[raw_data$UserId==userid,]$MovieId
+  non_ratedmovies = totalMovieIds[!totalMovieIds %in% ratedmoives]
+  df = data.frame(cbind(rep(userid), non_ratedmovies, 0))
+  names(df) = c("UserId", "MovieId", "Rating")
+  return(df)
+}
+# 943이 평가하지 않은 영화 df
+activeusernonratedmoviedf = nonratedmoviedf(943)
+head(activeusernonratedmoviedf)
+```
+```{r}
+# 프로필 구축
+activeuserratings = merge(x=activeusernonratedmoviedf, y=movies,
+                          by="MovieId", all.x=TRUE)
+head(activeuserratings)
+```
+
+### 개인화 추천 제공
+```{r}
+predictions <- predict(fit, activeuserratings[,-c(1:4)],
+                       type="class")
+recommend = data.frame(movieId=activeuserratings$MovieId,
+                       predictions)
+recommend = recommend[which(recommend$predictions==1),]
+```
+
+```{r}
+recommend[1:10,]
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
